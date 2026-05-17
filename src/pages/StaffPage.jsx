@@ -6,21 +6,20 @@ import { useAuth } from '@/features/auth/AuthContext';
 import ConfirmModal from '@/shared/ui/ConfirmModal';
 import {
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Plus, Pencil, Trash2,
-  X, Check, Calendar
+  X, Check, Calendar, Search
 } from 'lucide-react';
 
 const STAFF_PAGE_SIZE = 6;
 const TABLE_PAGE_SIZE = 10;
-/** Per expanded staff card: salary bills grid + payment history table */
 const CARD_SECTION_PAGE_SIZE = 6;
 
 const PERIOD_FILTERS = [
-  { value: 'all',        label: 'All Time' },
-  { value: 'today',    label: 'Today' },
+  { value: 'today',      label: 'Today' },
   { value: 'this_month', label: 'This Month' },
   { value: 'last_month', label: 'Last Month' },
   { value: 'this_year',  label: 'This Year' },
-  { value: 'custom',     label: 'Custom' },
+  { value: 'all',        label: 'All Time' },
+  { value: 'custom',     label: 'Custom Range' },
 ];
 
 const monthKey = (d) => {
@@ -28,7 +27,6 @@ const monthKey = (d) => {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
 };
 
-/** Inclusive calendar months between two YYYY-MM-DD strings */
 const monthKeysBetweenInclusive = (startStr, endStr) => {
   const keys = new Set();
   if (!startStr || !endStr) return keys;
@@ -43,10 +41,6 @@ const monthKeysBetweenInclusive = (startStr, endStr) => {
   return keys;
 };
 
-/**
- * Which salary-credit months count toward the "Total salary bill" summary card.
- * Always uses full calendar month(s), not a single day — so a one-day custom range still maps to that month.
- */
 const billingMonthKeysForSummary = (period, custom) => {
   const now = new Date();
   if (period === 'all') return null;
@@ -94,30 +88,14 @@ const getPeriodRange = (period, custom) => {
       const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
       return { start, end };
     }
-    case 'this_month': {
-      return {
-        start: new Date(now.getFullYear(), now.getMonth(), 1),
-        end:   new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
-      };
-    }
-    case 'last_month': {
-      return {
-        start: new Date(now.getFullYear(), now.getMonth() - 1, 1),
-        end:   new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999),
-      };
-    }
-    case 'this_year': {
-      return {
-        start: new Date(now.getFullYear(), 0, 1),
-        end:   new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999),
-      };
-    }
-    case 'custom': {
-      return {
-        start: custom.start ? new Date(custom.start) : null,
-        end:   custom.end   ? new Date(custom.end + 'T23:59:59') : null,
-      };
-    }
+    case 'this_month':
+      return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999) };
+    case 'last_month':
+      return { start: new Date(now.getFullYear(), now.getMonth() - 1, 1), end: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999) };
+    case 'this_year':
+      return { start: new Date(now.getFullYear(), 0, 1), end: new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999) };
+    case 'custom':
+      return { start: custom.start ? new Date(custom.start) : null, end: custom.end ? new Date(custom.end + 'T23:59:59') : null };
     default: return { start: null, end: null };
   }
 };
@@ -128,28 +106,18 @@ const filterSettlements = (settlements, period, custom) => {
   return (settlements || []).filter(s => {
     const d = new Date(s.date);
     if (start && d < start) return false;
-    if (end   && d > end)   return false;
+    if (end && d > end) return false;
     return true;
   });
 };
 
-/** Salary bill rows (YYYY-MM) that fall inside the selected period */
 const filterSalaryCredits = (credits, period, custom) => {
   const list = credits || [];
   if (period === 'all') return list;
   const now = new Date();
-  if (period === 'today' || period === 'this_month') {
-    const k = monthKey(now);
-    return list.filter(c => c.month === k);
-  }
-  if (period === 'last_month') {
-    const k = monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-    return list.filter(c => c.month === k);
-  }
-  if (period === 'this_year') {
-    const y = String(now.getFullYear());
-    return list.filter(c => (c.month || '').startsWith(`${y}-`));
-  }
+  if (period === 'today' || period === 'this_month') return list.filter(c => c.month === monthKey(now));
+  if (period === 'last_month') return list.filter(c => c.month === monthKey(new Date(now.getFullYear(), now.getMonth() - 1, 1)));
+  if (period === 'this_year') return list.filter(c => (c.month || '').startsWith(`${now.getFullYear()}-`));
   if (period === 'custom' && custom.start && custom.end) {
     const sm = custom.start.slice(0, 7);
     const em = custom.end.slice(0, 7);
@@ -161,7 +129,7 @@ const filterSalaryCredits = (credits, period, custom) => {
 const periodDescription = (period, custom) => {
   switch (period) {
     case 'all': return 'all-time';
-    case 'today': return 'today (payments dated today · bills: current month)';
+    case 'today': return 'today';
     case 'this_month': return 'this month';
     case 'last_month': return 'last month';
     case 'this_year': return 'this calendar year';
@@ -170,12 +138,27 @@ const periodDescription = (period, custom) => {
   }
 };
 
+const formatMonth = (key) => {
+  const [y, m] = key.split('-');
+  return new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+};
+
+const Skeleton = ({ style = {} }) => (
+  <div style={{
+    borderRadius: 8,
+    background: 'linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    ...style,
+  }} />
+);
+
 const SettleModal = ({ staff, settlement, onClose, onDone }) => {
   const isEdit = Boolean(settlement?._id);
   const [form, setForm] = useState({
-    amount:      settlement?.amount      ?? '',
+    amount:      settlement?.amount ?? '',
     fromAccount: settlement?.fromAccount ?? '',
-    note:        settlement?.note        ?? '',
+    note:        settlement?.note ?? '',
     date:        settlement?.date ? fmtDateInput(settlement.date) : fmtDateInput(new Date()),
   });
   const [saveConfirm, setSaveConfirm] = useState(false);
@@ -187,23 +170,16 @@ const SettleModal = ({ staff, settlement, onClose, onDone }) => {
       const payload = { ...form, amount: Number(form.amount), date: form.date };
       if (isEdit) await staffApi.updateSettlement(staff._id, settlement._id, payload);
       else        await staffApi.addSettlement(staff._id, payload);
-      onDone();
-      onClose();
+      onDone(); onClose();
     } catch (err) { alert(err.response?.data?.message || 'Error'); }
     finally { setSaving(false); setSaveConfirm(false); }
   };
 
   if (saveConfirm) {
     return (
-      <ConfirmModal
-        title={isEdit ? 'Update this settlement?' : 'Record this settlement?'}
-        confirmText={isEdit ? 'Update' : 'Record payment'}
-        onCancel={() => setSaveConfirm(false)}
-        onConfirm={doSave}
-        loading={saving}
-      >
+      <ConfirmModal title={isEdit ? 'Update this settlement?' : 'Record this settlement?'} confirmText={isEdit ? 'Update' : 'Record payment'} onCancel={() => setSaveConfirm(false)} onConfirm={doSave} loading={saving}>
         <p><span className="text-text font-medium">{staff.name}</span> · {fmtDate(form.date)} · {fmt(Number(form.amount) || 0)}</p>
-        <p className="mt-2">Account: {(ACCOUNTS.find((a) => a.value === form.fromAccount)?.label) || form.fromAccount || '—'}</p>
+        <p className="mt-2">Account: {(ACCOUNTS.find(a => a.value === form.fromAccount)?.label) || form.fromAccount || '—'}</p>
         {form.note ? <p className="mt-1">Note: {form.note}</p> : null}
       </ConfirmModal>
     );
@@ -218,10 +194,10 @@ const SettleModal = ({ staff, settlement, onClose, onDone }) => {
         </div>
         {!isEdit && (
           <p className="text-xs" style={{ color: '#94A3B8' }}>
-            Salary billed (all-time): <span className="font-mono" style={{ color: '#F1F5F9' }}>{fmt(staff.totalBilled)}</span> · Outstanding (all-time): <span className="font-mono" style={{ color: '#F59E0B' }}>{fmt(staff.outstanding)}</span>
+            Billed (all-time): <span className="font-mono" style={{ color: '#F1F5F9' }}>{fmt(staff.totalBilled)}</span> · Outstanding: <span className="font-mono" style={{ color: '#F59E0B' }}>{fmt(staff.outstanding)}</span>
           </p>
         )}
-        <form onSubmit={(e) => { e.preventDefault(); setSaveConfirm(true); }} className="space-y-3">
+        <form onSubmit={e => { e.preventDefault(); setSaveConfirm(true); }} className="space-y-3">
           <div>
             <label className="label">Date</label>
             <input type="date" className="input" value={form.date} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} required />
@@ -246,10 +222,7 @@ const SettleModal = ({ staff, settlement, onClose, onDone }) => {
           </div>
           <div className="flex gap-2 pt-2">
             <button type="button" onClick={onClose} className="btn-ghost flex-1 justify-center">Cancel</button>
-            <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center">
-              <Check size={15} />
-              {isEdit ? 'Review & update' : 'Review & settle'}
-            </button>
+            <button type="submit" disabled={saving} className="btn-primary flex-1 justify-center"><Check size={15} />{isEdit ? 'Review & update' : 'Review & settle'}</button>
           </div>
         </form>
       </div>
@@ -257,36 +230,20 @@ const SettleModal = ({ staff, settlement, onClose, onDone }) => {
   );
 };
 
-const formatMonth = (key) => {
-  const [y, m] = key.split('-');
-  const d = new Date(parseInt(y, 10), parseInt(m, 10) - 1, 1);
-  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
-};
-
 const StaffCard = ({ s, filteredSettlements, filteredCredits, onAdd, onEdit, onDelete, expanded, onToggle, canRemoveStaff, onRequestRemoveStaff }) => {
   const [billPage, setBillPage] = useState(1);
   const [payPage, setPayPage] = useState(1);
+  useEffect(() => { setBillPage(1); setPayPage(1); }, [expanded, filteredCredits, filteredSettlements]);
 
-  useEffect(() => {
-    setBillPage(1);
-    setPayPage(1);
-  }, [expanded, filteredCredits, filteredSettlements]);
-
-  const sortedCredits = useMemo(
-    () => [...filteredCredits].sort((a, b) => b.month.localeCompare(a.month)),
-    [filteredCredits],
-  );
-  const sortedPay = useMemo(
-    () => [...filteredSettlements].sort((a, b) => new Date(b.date) - new Date(a.date)),
-    [filteredSettlements],
-  );
+  const sortedCredits = useMemo(() => [...filteredCredits].sort((a, b) => b.month.localeCompare(a.month)), [filteredCredits]);
+  const sortedPay = useMemo(() => [...filteredSettlements].sort((a, b) => new Date(b.date) - new Date(a.date)), [filteredSettlements]);
   const billPages = Math.max(1, Math.ceil(sortedCredits.length / CARD_SECTION_PAGE_SIZE));
-  const payPages = Math.max(1, Math.ceil(sortedPay.length / CARD_SECTION_PAGE_SIZE));
+  const payPages  = Math.max(1, Math.ceil(sortedPay.length  / CARD_SECTION_PAGE_SIZE));
   const billSlice = sortedCredits.slice((billPage - 1) * CARD_SECTION_PAGE_SIZE, billPage * CARD_SECTION_PAGE_SIZE);
-  const paySlice = sortedPay.slice((payPage - 1) * CARD_SECTION_PAGE_SIZE, payPage * CARD_SECTION_PAGE_SIZE);
+  const paySlice  = sortedPay.slice((payPage - 1) * CARD_SECTION_PAGE_SIZE, payPage * CARD_SECTION_PAGE_SIZE);
 
-  const periodBilled = filteredCredits.reduce((sum, c) => sum + (c.amount || 0), 0);
-  const periodSettled = filteredSettlements.reduce((sum, st) => sum + (st.amount || 0), 0);
+  const periodBilled      = filteredCredits.reduce((sum, c) => sum + (c.amount || 0), 0);
+  const periodSettled     = filteredSettlements.reduce((sum, st) => sum + (st.amount || 0), 0);
   const periodOutstanding = periodBilled - periodSettled;
   const pct = periodBilled > 0 ? Math.round((periodSettled / periodBilled) * 100) : (periodSettled > 0 ? 100 : 0);
 
@@ -301,15 +258,7 @@ const StaffCard = ({ s, filteredSettlements, filteredCredits, onAdd, onEdit, onD
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => onAdd(s)} className="btn-primary text-xs py-1.5 px-3"><Plus size={12} /> Settle</button>
             {canRemoveStaff && (
-              <button
-                type="button"
-                onClick={() => onRequestRemoveStaff(s)}
-                className="btn-ghost text-xs py-1.5 px-2 border border-border"
-                style={{ color: '#94A3B8' }}
-                title="Deactivate staff"
-              >
-                <Trash2 size={12} />
-              </button>
+              <button type="button" onClick={() => onRequestRemoveStaff(s)} className="btn-ghost text-xs py-1.5 px-2 border border-border" style={{ color: '#94A3B8' }} title="Deactivate staff"><Trash2 size={12} /></button>
             )}
             <button type="button" onClick={onToggle} className="p-1 cursor-pointer" style={{ color: '#94A3B8' }}>
               {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -318,10 +267,10 @@ const StaffCard = ({ s, filteredSettlements, filteredCredits, onAdd, onEdit, onD
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
           {[
-            { label: 'Per month',    value: fmt(s.salary),        color: '#F1F5F9' },
-            { label: 'Billed in period', value: fmt(periodBilled),   color: '#F1F5F9' },
-            { label: 'Settled in period', value: fmt(periodSettled),  color: '#10B981' },
-            { label: 'Outstanding',  value: fmt(periodOutstanding),   color: periodOutstanding > 0 ? '#F59E0B' : '#94A3B8' },
+            { label: 'Per month',         value: fmt(s.salary),          color: '#F1F5F9' },
+            { label: 'Billed in period',  value: fmt(periodBilled),      color: '#F1F5F9' },
+            { label: 'Settled in period', value: fmt(periodSettled),     color: '#10B981' },
+            { label: 'Outstanding',       value: fmt(periodOutstanding), color: periodOutstanding > 0 ? '#F59E0B' : '#94A3B8' },
           ].map(c => (
             <div key={c.label}>
               <p className="text-xs" style={{ color: '#94A3B8' }}>{c.label}</p>
@@ -359,53 +308,50 @@ const StaffCard = ({ s, filteredSettlements, filteredCredits, onAdd, onEdit, onD
               <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                 <span className="text-xs" style={{ color: '#64748B' }}>Bills {billPage}/{billPages}</span>
                 <div className="flex gap-1">
-                  <button type="button" disabled={billPage <= 1} onClick={() => setBillPage((p) => p - 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronLeft size={14} /></button>
-                  <button type="button" disabled={billPage >= billPages} onClick={() => setBillPage((p) => p + 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronRight size={14} /></button>
+                  <button type="button" disabled={billPage <= 1} onClick={() => setBillPage(p => p - 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronLeft size={14} /></button>
+                  <button type="button" disabled={billPage >= billPages} onClick={() => setBillPage(p => p + 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronRight size={14} /></button>
                 </div>
               </div>
             )}
           </div>
-
           <div className="px-4 py-3">
-            <p className="text-sm font-medium mb-2" style={{ color: '#F1F5F9' }}>
-              Payment history (this staff, period)
-            </p>
+            <p className="text-sm font-medium mb-2" style={{ color: '#F1F5F9' }}>Payment history (this staff, period)</p>
             {filteredSettlements.length > 0 ? (
               <>
-              <table className="w-full text-xs">
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
-                    {['Date','From','Note','Amount',''].map(h => (
-                      <th key={h} className={`py-1.5 pr-3 font-medium ${h === 'Amount' ? 'text-right' : h === '' ? '' : 'text-left'}`} style={{ color: '#64748B' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {paySlice.map((st) => (
-                    <tr key={st._id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                      <td className="py-1.5 pr-3" style={{ color: '#94A3B8' }}>{fmtDate(st.date)}</td>
-                      <td className="py-1.5 pr-3" style={{ color: '#94A3B8' }}>{ACCOUNT_LABELS[st.fromAccount] || st.fromAccount || '—'}</td>
-                      <td className="py-1.5 pr-3 truncate max-w-32" style={{ color: '#94A3B8' }}>{st.note || '—'}</td>
-                      <td className="py-1.5 pr-3 text-right font-mono" style={{ color: '#10B981' }}>{fmt(st.amount)}</td>
-                      <td className="py-1.5">
-                        <div className="flex items-center gap-1 justify-end">
-                          <button type="button" onClick={() => onEdit(s, st)} className="p-1 rounded cursor-pointer transition-colors" style={{ color: '#64748B' }} onMouseEnter={e => e.currentTarget.style.color='#8B5CF6'} onMouseLeave={e => e.currentTarget.style.color='#64748B'} title="Edit"><Pencil size={12} /></button>
-                          <button type="button" onClick={() => onDelete(s, st)} className="p-1 rounded cursor-pointer transition-colors" style={{ color: '#64748B' }} onMouseEnter={e => e.currentTarget.style.color='#EF4444'} onMouseLeave={e => e.currentTarget.style.color='#64748B'} title="Delete"><Trash2 size={12} /></button>
-                        </div>
-                      </td>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.07)' }}>
+                      {['Date', 'From', 'Note', 'Amount', ''].map(h => (
+                        <th key={h} className={`py-1.5 pr-3 font-medium text-left`} style={{ color: '#64748B' }}>{h}</th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              {payPages > 1 && (
-                <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                  <span className="text-xs" style={{ color: '#64748B' }}>Payments {payPage}/{payPages}</span>
-                  <div className="flex gap-1">
-                    <button type="button" disabled={payPage <= 1} onClick={() => setPayPage((p) => p - 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronLeft size={14} /></button>
-                    <button type="button" disabled={payPage >= payPages} onClick={() => setPayPage((p) => p + 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronRight size={14} /></button>
+                  </thead>
+                  <tbody>
+                    {paySlice.map(st => (
+                      <tr key={st._id} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+                        <td className="py-1.5 pr-3" style={{ color: '#94A3B8' }}>{fmtDate(st.date)}</td>
+                        <td className="py-1.5 pr-3" style={{ color: '#94A3B8' }}>{ACCOUNT_LABELS[st.fromAccount] || st.fromAccount || '—'}</td>
+                        <td className="py-1.5 pr-3 truncate max-w-32" style={{ color: '#94A3B8' }}>{st.note || '—'}</td>
+                        <td className="py-1.5 pr-3 text-right font-mono" style={{ color: '#10B981' }}>{fmt(st.amount)}</td>
+                        <td className="py-1.5">
+                          <div className="flex items-center gap-1 justify-end">
+                            <button type="button" onClick={() => onEdit(s, st)} className="p-1 rounded cursor-pointer" style={{ color: '#64748B' }} onMouseEnter={e => e.currentTarget.style.color='#8B5CF6'} onMouseLeave={e => e.currentTarget.style.color='#64748B'}><Pencil size={12} /></button>
+                            <button type="button" onClick={() => onDelete(s, st)} className="p-1 rounded cursor-pointer" style={{ color: '#64748B' }} onMouseEnter={e => e.currentTarget.style.color='#EF4444'} onMouseLeave={e => e.currentTarget.style.color='#64748B'}><Trash2 size={12} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {payPages > 1 && (
+                  <div className="flex items-center justify-between mt-2 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <span className="text-xs" style={{ color: '#64748B' }}>Payments {payPage}/{payPages}</span>
+                    <div className="flex gap-1">
+                      <button type="button" disabled={payPage <= 1} onClick={() => setPayPage(p => p - 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronLeft size={14} /></button>
+                      <button type="button" disabled={payPage >= payPages} onClick={() => setPayPage(p => p + 1)} className="p-1 rounded disabled:opacity-40" style={{ color: '#94A3B8' }}><ChevronRight size={14} /></button>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
               </>
             ) : <p className="text-xs py-2" style={{ color: '#94A3B8' }}>No payments in this period</p>}
           </div>
@@ -418,15 +364,15 @@ const StaffCard = ({ s, filteredSettlements, filteredCredits, onAdd, onEdit, onD
 export default function StaffPage() {
   const { user } = useAuth();
   const canRemoveStaff = ['admin', 'owner'].includes(user?.role);
-  const [data, setData]     = useState({ staff: [], totalBill: 0, totalSettled: 0, outstanding: 0 });
+  const [data, setData]       = useState({ staff: [], totalBill: 0, totalSettled: 0, outstanding: 0 });
   const [loading, setLoading] = useState(true);
-  const [modal, setModal]   = useState(null);
+  const [modal, setModal]     = useState(null);
   const [expanded, setExpanded] = useState({});
-  const [period, setPeriod] = useState('all');
-  const [custom, setCustom] = useState({ start: '', end: '' });
+  const [period, setPeriod]   = useState('this_month');
+  const [custom, setCustom]   = useState({ start: '', end: '' });
+  const [searchQuery, setSearchQuery] = useState('');
   const [staffListPage, setStaffListPage] = useState(1);
-  const [payTablePage, setPayTablePage] = useState(1);
-  const [billTablePage, setBillTablePage] = useState(1);
+  const [payTablePage, setPayTablePage]   = useState(1);
   const [deleteSettlementConfirm, setDeleteSettlementConfirm] = useState(null);
   const [deletingSettlement, setDeletingSettlement] = useState(false);
   const [removeStaffTarget, setRemoveStaffTarget] = useState(null);
@@ -434,156 +380,82 @@ export default function StaffPage() {
 
   const load = async () => {
     setLoading(true);
-    try {
-      const res = await staffApi.getSalarySummary();
-      setData(res.data);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+    try { const res = await staffApi.getSalarySummary(); setData(res.data); }
+    catch (e) { console.error(e); } finally { setLoading(false); }
   };
 
   useEffect(() => { load(); }, []);
-
-  useEffect(() => {
-    setStaffListPage(1);
-    setPayTablePage(1);
-    setBillTablePage(1);
-  }, [period, custom.start, custom.end]);
+  useEffect(() => { setStaffListPage(1); setPayTablePage(1); }, [period, custom.start, custom.end, searchQuery]);
 
   const toggleExpand = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }));
 
-  const handleDeleteSettlement = (staff, settlement) => {
-    setDeleteSettlementConfirm({ staff, settlement });
-  };
+  const staffWithFiltered = useMemo(() => (data.staff || []).map(s => {
+    const filteredSettlements = filterSettlements(s.settlements || [], period, custom);
+    const filteredCredits     = filterSalaryCredits(s.salaryCredits || [], period, custom);
+    const periodBilled        = filteredCredits.reduce((sum, c) => sum + (c.amount || 0), 0);
+    const periodSettled       = filteredSettlements.reduce((sum, st) => sum + (st.amount || 0), 0);
+    return { ...s, filteredSettlements, filteredCredits, periodBilled, periodSettled, periodOutstanding: periodBilled - periodSettled };
+  }), [data.staff, period, custom]);
 
-  const confirmRemoveStaff = async () => {
-    if (!removeStaffTarget) return;
-    setRemovingStaff(true);
-    try {
-      await staffApi.delete(removeStaffTarget._id);
-      setRemoveStaffTarget(null);
-      load();
-    } catch (err) {
-      alert(err.response?.data?.message || 'Could not remove staff');
-    } finally {
-      setRemovingStaff(false);
-    }
-  };
+  const filteredStaff = useMemo(() => {
+    if (!searchQuery.trim()) return staffWithFiltered;
+    const q = searchQuery.toLowerCase();
+    return staffWithFiltered.filter(s => s.name?.toLowerCase().includes(q) || s.role?.toLowerCase().includes(q));
+  }, [staffWithFiltered, searchQuery]);
 
-  const confirmDeleteSettlement = async () => {
-    if (!deleteSettlementConfirm) return;
-    const { staff, settlement } = deleteSettlementConfirm;
-    setDeletingSettlement(true);
-    try {
-      await staffApi.deleteSettlement(staff._id, settlement._id);
-      setDeleteSettlementConfirm(null);
-      load();
-    } catch (err) { alert(err.response?.data?.message || 'Error'); }
-    finally { setDeletingSettlement(false); }
-  };
-
-  const staffWithFiltered = useMemo(() => {
-    return (data.staff || []).map(s => {
-      const filteredSettlements = filterSettlements(s.settlements || [], period, custom);
-      const filteredCredits = filterSalaryCredits(s.salaryCredits || [], period, custom);
-      const periodBilled = filteredCredits.reduce((sum, c) => sum + (c.amount || 0), 0);
-      const periodSettled = filteredSettlements.reduce((sum, st) => sum + (st.amount || 0), 0);
-      return {
-        ...s,
-        filteredSettlements,
-        filteredCredits,
-        periodBilled,
-        periodSettled,
-        periodOutstanding: periodBilled - periodSettled,
-      };
-    });
-  }, [data.staff, period, custom]);
-
-  const periodBilledTotal = useMemo(
-    () => staffWithFiltered.reduce((sum, s) => sum + s.periodBilled, 0),
-    [staffWithFiltered],
-  );
-  const periodSettledTotal = useMemo(
-    () => staffWithFiltered.reduce((sum, s) => sum + s.periodSettled, 0),
-    [staffWithFiltered],
-  );
+  const periodBilledTotal      = useMemo(() => staffWithFiltered.reduce((sum, s) => sum + s.periodBilled, 0), [staffWithFiltered]);
+  const periodSettledTotal     = useMemo(() => staffWithFiltered.reduce((sum, s) => sum + s.periodSettled, 0), [staffWithFiltered]);
   const periodOutstandingTotal = periodBilledTotal - periodSettledTotal;
 
   const allPaymentsInPeriod = useMemo(() => {
     const rows = [];
-    staffWithFiltered.forEach((s) => {
-      s.filteredSettlements.forEach((st) => {
-        rows.push({ staffName: s.name, staffId: s._id, ...st });
-      });
-    });
+    staffWithFiltered.forEach(s => s.filteredSettlements.forEach(st => rows.push({ staffName: s.name, staffId: s._id, ...st })));
     return rows.sort((a, b) => new Date(b.date) - new Date(a.date));
   }, [staffWithFiltered]);
 
-  const allBillsInPeriod = useMemo(() => {
-    const rows = [];
-    staffWithFiltered.forEach((s) => {
-      s.filteredCredits.forEach((c) => {
-        rows.push({ staffName: s.name, staffId: s._id, month: c.month, amount: c.amount });
-      });
-    });
-    return rows.sort((a, b) => b.month.localeCompare(a.month));
-  }, [staffWithFiltered]);
-
   const billingKeys = useMemo(() => billingMonthKeysForSummary(period, custom), [period, custom.start, custom.end]);
-
-  const monthlySalaryBillTotal = useMemo(() => {
-    if (period === 'all') return data.totalBill || 0;
-    return sumSalaryCreditsInMonths(data.staff, billingKeys);
-  }, [period, data.totalBill, data.staff, billingKeys]);
-
-  const billingMonthsSubtitle = useMemo(() => {
-    if (period === 'all') return `${data.staff?.length || 0} staff · all-time salary billed`;
-    return `${data.staff?.length || 0} staff · ${describeBillingMonthsLabel(billingKeys)}`;
-  }, [period, data.staff?.length, billingKeys]);
+  const monthlySalaryBillTotal = useMemo(() => period === 'all' ? (data.totalBill || 0) : sumSalaryCreditsInMonths(data.staff, billingKeys), [period, data.totalBill, data.staff, billingKeys]);
+  const billingMonthsSubtitle  = useMemo(() => period === 'all' ? `${data.staff?.length || 0} staff · all-time` : `${data.staff?.length || 0} staff · ${describeBillingMonthsLabel(billingKeys)}`, [period, data.staff?.length, billingKeys]);
 
   const payTablePages = Math.max(1, Math.ceil(allPaymentsInPeriod.length / TABLE_PAGE_SIZE));
-  const billTablePages = Math.max(1, Math.ceil(allBillsInPeriod.length / TABLE_PAGE_SIZE));
-  const payTableSlice = useMemo(() => {
-    const start = (payTablePage - 1) * TABLE_PAGE_SIZE;
-    return allPaymentsInPeriod.slice(start, start + TABLE_PAGE_SIZE);
-  }, [allPaymentsInPeriod, payTablePage]);
-  const billTableSlice = useMemo(() => {
-    const start = (billTablePage - 1) * TABLE_PAGE_SIZE;
-    return allBillsInPeriod.slice(start, start + TABLE_PAGE_SIZE);
-  }, [allBillsInPeriod, billTablePage]);
-
-  const staffListPages = Math.max(1, Math.ceil(staffWithFiltered.length / STAFF_PAGE_SIZE));
-  const staffListSlice = useMemo(() => {
-    const start = (staffListPage - 1) * STAFF_PAGE_SIZE;
-    return staffWithFiltered.slice(start, start + STAFF_PAGE_SIZE);
-  }, [staffWithFiltered, staffListPage]);
+  const payTableSlice = useMemo(() => allPaymentsInPeriod.slice((payTablePage - 1) * TABLE_PAGE_SIZE, payTablePage * TABLE_PAGE_SIZE), [allPaymentsInPeriod, payTablePage]);
+  const staffListPages = Math.max(1, Math.ceil(filteredStaff.length / STAFF_PAGE_SIZE));
+  const staffListSlice = useMemo(() => filteredStaff.slice((staffListPage - 1) * STAFF_PAGE_SIZE, staffListPage * STAFF_PAGE_SIZE), [filteredStaff, staffListPage]);
 
   const pDesc = periodDescription(period, custom);
 
   return (
     <div className="space-y-4">
+      <style>{`@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }`}</style>
+
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <h2 className="text-lg font-bold" style={{ color: '#F1F5F9' }}>Staff Management</h2>
-        <Link to="/staff/manage" className="btn-ghost text-sm">
-          <Plus size={15} /> Manage Staff →
-        </Link>
+        <Link to="/staff/manage" className="btn-ghost text-sm"><Plus size={15} /> Manage Staff →</Link>
       </div>
 
+      {/* Filters — all 6 visible including Today and Custom */}
       <div className="flex flex-wrap gap-2 items-center">
-        {PERIOD_FILTERS.map(f => (
-          <button
-            key={f.value}
-            type="button"
-            onClick={() => setPeriod(f.value)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer"
-            style={period === f.value
-              ? { background: 'var(--color-primary)', color: '#fff', boxShadow: '0 2px 8px rgba(139,92,246,0.4)' }
-              : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#94A3B8' }
-            }
-          >
-            {f.label}
-          </button>
-        ))}
+        {PERIOD_FILTERS.map(f => {
+          const isActive  = period === f.value;
+          const isDefault = f.value === 'this_month';
+          return (
+            <button key={f.value} type="button" onClick={() => { setPeriod(f.value); setStaffListPage(1); }}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer relative"
+              style={isActive
+                ? { background: 'var(--color-primary)', color: '#fff', boxShadow: '0 2px 8px rgba(139,92,246,0.4)' }
+                : isDefault
+                  ? { background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.4)', color: '#A78BFA' }
+                  : { background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#94A3B8' }
+              }>
+              {f.label}
+              {isDefault && !isActive && (
+                <span style={{ position: 'absolute', top: -4, right: -4, width: 8, height: 8, borderRadius: '50%', background: 'var(--color-primary)', border: '1.5px solid var(--color-surface)' }} />
+              )}
+            </button>
+          );
+        })}
         {period === 'custom' && (
-          <div className="flex gap-2 items-center">
+          <div className="flex gap-2 items-center mt-1 w-full sm:w-auto">
             <input type="date" className="input text-xs py-1.5 w-36" value={custom.start} onChange={e => setCustom(p => ({ ...p, start: e.target.value }))} />
             <span className="text-xs" style={{ color: '#94A3B8' }}>to</span>
             <input type="date" className="input text-xs py-1.5 w-36" value={custom.end} onChange={e => setCustom(p => ({ ...p, end: e.target.value }))} />
@@ -591,11 +463,22 @@ export default function StaffPage() {
         )}
       </div>
 
+      {/* Search */}
+      <div className="relative max-w-sm">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#64748B' }} />
+        <input type="text" className="input pl-9 text-sm" placeholder="Search staff by name or role…"
+          value={searchQuery} onChange={e => { setSearchQuery(e.target.value); setStaffListPage(1); }} />
+        {searchQuery && (
+          <button type="button" onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer" style={{ color: '#64748B' }}><X size={14} /></button>
+        )}
+      </div>
+
+      {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           { label: 'Total salary bill', value: fmt(monthlySalaryBillTotal), sub: billingMonthsSubtitle, color: '#F1F5F9' },
-          { label: period === 'all' ? 'Total settled' : 'Settled in period', value: fmt(period === 'all' ? data.totalSettled : periodSettledTotal), sub: `Payments in range · ${pDesc}`, color: '#10B981' },
-          { label: 'Outstanding', value: fmt(period === 'all' ? data.outstanding : periodOutstandingTotal), sub: period === 'all' ? 'All-time billed − all-time settled' : 'Period bills − payments in range', color: periodOutstandingTotal > 0 ? '#F59E0B' : '#94A3B8' },
+          { label: period === 'all' ? 'Total settled' : 'Settled in period', value: fmt(period === 'all' ? data.totalSettled : periodSettledTotal), sub: `Payments · ${pDesc}`, color: '#10B981' },
+          { label: 'Outstanding', value: fmt(period === 'all' ? data.outstanding : periodOutstandingTotal), sub: period === 'all' ? 'All-time billed − settled' : 'Period bills − payments', color: periodOutstandingTotal > 0 ? '#F59E0B' : '#94A3B8' },
         ].map(c => (
           <div key={c.label} className="card text-center">
             <p className="text-xs mb-1" style={{ color: '#94A3B8' }}>{c.label}</p>
@@ -605,114 +488,97 @@ export default function StaffPage() {
         ))}
       </div>
 
-      {/* All-staff tables (period-scoped) */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="card p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <h3 className="text-sm font-semibold text-text">Payment history — all staff</h3>
-            <p className="text-xs text-muted">{allPaymentsInPeriod.length} payment(s) · {pDesc}</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--color-card)] border-b border-border">
-                <tr>
-                  {['Staff', 'Date', 'Account', 'Amount', 'Note'].map(h => (
-                    <th key={h} className={`px-3 py-2 text-left text-xs font-medium text-muted ${h === 'Amount' ? 'text-right' : ''}`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {allPaymentsInPeriod.length === 0 ? (
-                  <tr><td colSpan={5} className="px-3 py-8 text-center text-muted text-xs">No payments in this period</td></tr>
-                ) : payTableSlice.map((row, i) => (
-                  <tr key={`${row.staffId}-${row._id || i}`} className="border-b border-border/50">
-                    <td className="px-3 py-2 text-text text-xs font-medium">{row.staffName}</td>
-                    <td className="px-3 py-2 text-muted text-xs whitespace-nowrap">{fmtDate(row.date)}</td>
-                    <td className="px-3 py-2 text-muted text-xs">{ACCOUNT_LABELS[row.fromAccount] || row.fromAccount || '—'}</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs text-success">{fmt(row.amount)}</td>
-                    <td className="px-3 py-2 text-muted text-xs truncate max-w-[120px]">{row.note || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {payTablePages > 1 && (
-            <div className="flex items-center justify-between px-3 py-2 border-t border-border">
-              <span className="text-xs text-muted">Page {payTablePage} / {payTablePages}</span>
-              <div className="flex gap-2">
-                <button type="button" disabled={payTablePage <= 1} onClick={() => setPayTablePage((p) => p - 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronLeft size={14} /></button>
-                <button type="button" disabled={payTablePage >= payTablePages} onClick={() => setPayTablePage((p) => p + 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronRight size={14} /></button>
-              </div>
-            </div>
-          )}
+      {/* Payment history table */}
+      <div className="card p-0 overflow-hidden">
+        <div className="px-4 py-3 border-b border-border">
+          <h3 className="text-sm font-semibold text-text">Payment history — all staff</h3>
+          <p className="text-xs text-muted">{allPaymentsInPeriod.length} payment(s) · {pDesc}</p>
         </div>
-
-        <div className="card p-0 overflow-hidden">
-          <div className="px-4 py-3 border-b border-border">
-            <h3 className="text-sm font-semibold text-text">Salary bills — all staff</h3>
-            <p className="text-xs text-muted">{allBillsInPeriod.length} line(s) · {pDesc}</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--color-card)] border-b border-border">
-                <tr>
-                  {['Staff', 'Month', 'Amount'].map(h => (
-                    <th key={h} className={`px-3 py-2 text-left text-xs font-medium text-muted ${h === 'Amount' ? 'text-right' : ''}`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {allBillsInPeriod.length === 0 ? (
-                  <tr><td colSpan={3} className="px-3 py-8 text-center text-muted text-xs">No bills in this period</td></tr>
-                ) : billTableSlice.map((row, i) => (
-                  <tr key={`${row.staffId}-${row.month}-${i}`} className="border-b border-border/50">
-                    <td className="px-3 py-2 text-text text-xs font-medium">{row.staffName}</td>
-                    <td className="px-3 py-2 text-muted text-xs">{formatMonth(row.month)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-xs">{fmt(row.amount)}</td>
-                  </tr>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border">
+              <tr>
+                {['Staff', 'Date', 'Account', 'Amount', 'Note'].map(h => (
+                  <th key={h} className={`px-3 py-2 text-left text-xs font-medium text-muted ${h === 'Amount' ? 'text-right' : ''}`}>{h}</th>
                 ))}
-              </tbody>
-            </table>
-          </div>
-          {billTablePages > 1 && (
-            <div className="flex items-center justify-between px-3 py-2 border-t border-border">
-              <span className="text-xs text-muted">Page {billTablePage} / {billTablePages}</span>
-              <div className="flex gap-2">
-                <button type="button" disabled={billTablePage <= 1} onClick={() => setBillTablePage((p) => p - 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronLeft size={14} /></button>
-                <button type="button" disabled={billTablePage >= billTablePages} onClick={() => setBillTablePage((p) => p + 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronRight size={14} /></button>
-              </div>
-            </div>
-          )}
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                Array(4).fill(0).map((_, i) => (
+                  <tr key={i} className="border-b border-border/50">
+                    {[120, 80, 80, 60, 100].map((w, j) => (
+                      <td key={j} className="px-3 py-2"><Skeleton style={{ height: 13, width: w }} /></td>
+                    ))}
+                  </tr>
+                ))
+              ) : allPaymentsInPeriod.length === 0 ? (
+                <tr><td colSpan={5} className="px-3 py-8 text-center text-muted text-xs">No payments in this period</td></tr>
+              ) : payTableSlice.map((row, i) => (
+                <tr key={`${row.staffId}-${row._id || i}`} className="border-b border-border/50">
+                  <td className="px-3 py-2 text-text text-xs font-medium">{row.staffName}</td>
+                  <td className="px-3 py-2 text-muted text-xs whitespace-nowrap">{fmtDate(row.date)}</td>
+                  <td className="px-3 py-2 text-muted text-xs">{ACCOUNT_LABELS[row.fromAccount] || row.fromAccount || '—'}</td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-success">{fmt(row.amount)}</td>
+                  <td className="px-3 py-2 text-muted text-xs truncate max-w-[120px]">{row.note || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+        {!loading && payTablePages > 1 && (
+          <div className="flex items-center justify-between px-3 py-2 border-t border-border">
+            <span className="text-xs text-muted">Page {payTablePage} / {payTablePages}</span>
+            <div className="flex gap-2">
+              <button type="button" disabled={payTablePage <= 1} onClick={() => setPayTablePage(p => p - 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronLeft size={14} /></button>
+              <button type="button" disabled={payTablePage >= payTablePages} onClick={() => setPayTablePage(p => p + 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronRight size={14} /></button>
+            </div>
+          </div>
+        )}
       </div>
 
+      {/* Staff cards */}
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin" style={{ borderColor: '#8B5CF6', borderTopColor: 'transparent' }} />
+        <div className="space-y-3">
+          {Array(3).fill(0).map((_, i) => (
+            <div key={i} className="card p-4 space-y-3">
+              <div className="flex justify-between">
+                <div className="space-y-2"><Skeleton style={{ height: 16, width: 120 }} /><Skeleton style={{ height: 11, width: 80 }} /></div>
+                <Skeleton style={{ height: 32, width: 80, borderRadius: 8 }} />
+              </div>
+              <div className="grid grid-cols-4 gap-3">
+                {Array(4).fill(0).map((_, j) => <div key={j} className="space-y-1"><Skeleton style={{ height: 10, width: 60 }} /><Skeleton style={{ height: 16, width: 80 }} /></div>)}
+              </div>
+              <Skeleton style={{ height: 6, borderRadius: 4 }} />
+            </div>
+          ))}
         </div>
       ) : (
         <div className="space-y-3">
+          {searchQuery && (
+            <p className="text-xs" style={{ color: '#94A3B8' }}>
+              {filteredStaff.length === 0 ? 'No staff matched your search.' : `${filteredStaff.length} result(s) for "${searchQuery}"`}
+            </p>
+          )}
           {staffListSlice.map(s => (
-            <StaffCard
-              key={s._id}
-              s={s}
+            <StaffCard key={s._id} s={s}
               filteredSettlements={s.filteredSettlements}
               filteredCredits={s.filteredCredits}
-              onAdd={(staff)              => setModal({ staff, settlement: null })}
+              onAdd={staff => setModal({ staff, settlement: null })}
               onEdit={(staff, settlement) => setModal({ staff, settlement })}
-              onDelete={handleDeleteSettlement}
+              onDelete={(staff, settlement) => setDeleteSettlementConfirm({ staff, settlement })}
               expanded={!!expanded[s._id]}
               onToggle={() => toggleExpand(s._id)}
               canRemoveStaff={canRemoveStaff}
-              onRequestRemoveStaff={(st) => setRemoveStaffTarget(st)}
+              onRequestRemoveStaff={st => setRemoveStaffTarget(st)}
             />
           ))}
           {staffListPages > 1 && (
             <div className="flex items-center justify-between card px-4 py-2">
               <span className="text-xs text-muted">Staff page {staffListPage} / {staffListPages}</span>
               <div className="flex gap-2">
-                <button type="button" disabled={staffListPage <= 1} onClick={() => setStaffListPage((p) => p - 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronLeft size={14} /></button>
-                <button type="button" disabled={staffListPage >= staffListPages} onClick={() => setStaffListPage((p) => p + 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronRight size={14} /></button>
+                <button type="button" disabled={staffListPage <= 1} onClick={() => setStaffListPage(p => p - 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronLeft size={14} /></button>
+                <button type="button" disabled={staffListPage >= staffListPages} onClick={() => setStaffListPage(p => p + 1)} className="btn-ghost text-xs py-1 px-2 disabled:opacity-40"><ChevronRight size={14} /></button>
               </div>
             </div>
           )}
@@ -724,40 +590,35 @@ export default function StaffPage() {
         </div>
       )}
 
-      {modal && (
-        <SettleModal
-          staff={modal.staff}
-          settlement={modal.settlement}
-          onClose={() => setModal(null)}
-          onDone={load}
-        />
-      )}
+      {modal && <SettleModal staff={modal.staff} settlement={modal.settlement} onClose={() => setModal(null)} onDone={load} />}
 
       {deleteSettlementConfirm && (
-        <ConfirmModal
-          title="Delete settlement?"
-          danger
-          confirmText="Delete"
+        <ConfirmModal title="Delete settlement?" danger confirmText="Delete"
           onCancel={() => !deletingSettlement && setDeleteSettlementConfirm(null)}
-          onConfirm={confirmDeleteSettlement}
-          loading={deletingSettlement}
-        >
+          onConfirm={async () => {
+            const { staff, settlement } = deleteSettlementConfirm;
+            setDeletingSettlement(true);
+            try { await staffApi.deleteSettlement(staff._id, settlement._id); setDeleteSettlementConfirm(null); load(); }
+            catch (err) { alert(err.response?.data?.message || 'Error'); }
+            finally { setDeletingSettlement(false); }
+          }}
+          loading={deletingSettlement}>
           Remove payment of <span className="font-mono text-text">{fmt(deleteSettlementConfirm.settlement.amount)}</span> for{' '}
-          <span className="text-text font-medium">{deleteSettlementConfirm.staff.name}</span> on{' '}
-          {fmtDate(deleteSettlementConfirm.settlement.date)}? This also removes the linked salary line from the ROI entry for that day.
+          <span className="text-text font-medium">{deleteSettlementConfirm.staff.name}</span> on {fmtDate(deleteSettlementConfirm.settlement.date)}?
         </ConfirmModal>
       )}
 
       {removeStaffTarget && (
-        <ConfirmModal
-          title="Deactivate staff member?"
-          danger
-          confirmText="Remove"
+        <ConfirmModal title="Deactivate staff member?" danger confirmText="Remove"
           onCancel={() => !removingStaff && setRemoveStaffTarget(null)}
-          onConfirm={confirmRemoveStaff}
-          loading={removingStaff}
-        >
-          Deactivate <span className="font-medium text-text">{removeStaffTarget.name}</span>? They disappear from this list; settlements and history are kept. You can re-add them from Manage Staff if needed.
+          onConfirm={async () => {
+            setRemovingStaff(true);
+            try { await staffApi.delete(removeStaffTarget._id); setRemoveStaffTarget(null); load(); }
+            catch (err) { alert(err.response?.data?.message || 'Could not remove staff'); }
+            finally { setRemovingStaff(false); }
+          }}
+          loading={removingStaff}>
+          Deactivate <span className="font-medium text-text">{removeStaffTarget.name}</span>? They disappear from this list; history is kept.
         </ConfirmModal>
       )}
     </div>
